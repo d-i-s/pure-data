@@ -150,6 +150,7 @@ struct _instanceinter
 #endif
 #if PDTHREADS
     pthread_mutex_t i_mutex;
+    pthread_mutex_t i_guimutex;
 #endif
 
     unsigned char i_recvbuf[NET_MAXPACKETSIZE];
@@ -838,7 +839,7 @@ void sys_vgui(const char *fmt, ...)
     if(msglen < 0)
     {
         fprintf(stderr,
-            "sys_vgui: pd_snprintf() failed with error code %d\n", errno);
+            "Pd: buffer space wasn't sufficient for long GUI string\n");
         return;
     }
     if (msglen >= INTER->i_guisize - INTER->i_guihead)
@@ -916,9 +917,11 @@ static const char**namelist2strings(t_namelist *nl, unsigned int *N) {
     }
     return result;
 }
-
+void pdgui_lock(void);
+void pdgui_unlock(void);
 static int sys_flushtogui(void)
 {
+    pdgui_lock();
     int writesize = INTER->i_guihead - INTER->i_guitail,
         nwrote = 0;
     if (writesize > 0)
@@ -926,7 +929,6 @@ static int sys_flushtogui(void)
             INTER->i_guisock,
             INTER->i_guibuf + INTER->i_guitail,
             writesize, 0);
-
 #if 0
     if (writesize)
         fprintf(stderr, "wrote %d of %d\n", nwrote, writesize);
@@ -937,8 +939,10 @@ static int sys_flushtogui(void)
         perror("pd-to-gui socket");
         sys_bail(1);
     }
-    else if (!nwrote)
+    else if (!nwrote) {
+        pdgui_unlock();
         return (0);
+    }
     else if (nwrote >= INTER->i_guihead - INTER->i_guitail)
         INTER->i_guihead = INTER->i_guitail = 0;
     else if (nwrote)
@@ -953,6 +957,7 @@ static int sys_flushtogui(void)
             INTER->i_guitail = 0;
         }
     }
+    pdgui_unlock();
     return (1);
 }
 
@@ -1878,6 +1883,7 @@ void s_inter_newpdinstance(void)
 #if PDTHREADS
     pthread_mutex_init(&INTER->i_mutex, NULL);
     pd_this->pd_islocked = 0;
+    pthread_mutex_init(&INTER->i_guimutex, NULL);
 #endif
 #ifdef _WIN32
     INTER->i_freq = 0;
@@ -1899,6 +1905,7 @@ void s_inter_free(t_instanceinter *inter)
     }
 #if PDTHREADS
     pthread_mutex_destroy(&inter->i_mutex);
+    pthread_mutex_destroy(&inter->i_guimutex);
 #endif
     freebytes(inter, sizeof(*inter));
 }
@@ -1989,6 +1996,14 @@ int sys_trylock(void)
 #endif
 }
 
+void pdgui_lock(void)
+{
+    pthread_mutex_lock(&INTER->i_guimutex);
+}
+void pdgui_unlock(void)
+{
+    pthread_mutex_unlock(&INTER->i_guimutex);
+}
 #else /* PDTHREADS */
 
 #ifdef TEST_LOCKING /* run standalone Pd with this to find deadlocks */
@@ -2010,5 +2025,8 @@ void sys_unlock(void) {}
 #endif
 void pd_globallock(void) {}
 void pd_globalunlock(void) {}
+
+void pdgui_lock(void) {}
+void pdgui_unlock(void) {}
 
 #endif /* PDTHREADS */
